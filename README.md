@@ -6,6 +6,8 @@ This is the official repository for "[Universal and Transferable Adversarial Att
 
 Check out our [website and demo here](https://llm-attacks.org/).
 
+Cited by Junsheng Huang and make some changes to do my experience.S
+
 ## Updates
 - (2023-08-16) We include a notebook `demo.ipynb` (or see it on [Colab](https://colab.research.google.com/drive/1dinZSyP1E4KokSLPcCh1JQFUFsN-WV--?usp=sharing)) containing the minimal implementation of GCG for jailbreaking LLaMA-2 for generating harmful completion.
 
