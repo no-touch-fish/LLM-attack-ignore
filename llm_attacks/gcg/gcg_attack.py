@@ -34,6 +34,7 @@ def token_gradients(model, input_ids, input_slice, target_slice, loss_slice):
     """
 
     embed_weights = get_embedding_matrix(model)
+    # one hot encoding for the input tokens
     one_hot = torch.zeros(
         input_ids[input_slice].shape[0],
         embed_weights.shape[0],
@@ -88,21 +89,30 @@ class GCGPromptManager(PromptManager):
         super().__init__(*args, **kwargs)
 
     def sample_control(self, grad, batch_size, topk=256, temp=1, allow_non_ascii=True):
-
+        # non_ascii token
         if not allow_non_ascii:
             grad[:, self._nonascii_toks.to(grad.device)] = np.infty
+        # choose too-k token
         top_indices = (-grad).topk(topk, dim=1).indices
         control_toks = self.control_toks.to(grad.device)
+        # init the element of the batch
         original_control_toks = control_toks.repeat(batch_size, 1)
+        # token's changing place (make modication here, enusre ended with " [/INST]" 8 index)
+        # token_avoid = 0
+        # token_position = len(control_toks) - token_avoid
         new_token_pos = torch.arange(
             0, 
-            len(control_toks), 
-            len(control_toks) / batch_size,
+            len(control_toks), # token_position, 
+            len(control_toks) / batch_size, # token_position / batch_size,
             device=grad.device
         ).type(torch.int64)
+        # print(len(control_toks), batch_size, len(new_token_pos))
+        # print('old control unit:',len(control_toks))
+        # adjusted_batch_size = len(new_token_pos)
+        # change the token 
         new_token_val = torch.gather(
             top_indices[new_token_pos], 1, 
-            torch.randint(0, topk, (batch_size, 1),
+            torch.randint(0, topk, (batch_size, 1), # (adjusted_batch_size, 1), # choose random one
             device=grad.device)
         )
         new_control_toks = original_control_toks.scatter_(1, new_token_pos.unsqueeze(-1), new_token_val)
@@ -114,7 +124,7 @@ class GCGMultiPromptAttack(MultiPromptAttack):
     def __init__(self, *args, **kwargs):
 
         super().__init__(*args, **kwargs)
-
+    # batch size: 1024(original)
     def step(self, 
              batch_size=1024, 
              topk=256, 
@@ -154,7 +164,11 @@ class GCGMultiPromptAttack(MultiPromptAttack):
 
         with torch.no_grad():
             control_cand = self.prompts[j].sample_control(grad, batch_size, topk, temp, allow_non_ascii)
+            # print('the length of not filtered string is:',[len(control_cand[i]) for i in range(control_cand.shape[0])])
             control_cands.append(self.get_filtered_cands(j, control_cand, filter_cand=filter_cand, curr_control=self.control_str))
+            # for control_unit in control_cands[0]:
+            #     if len(self.workers[0].tokenizer(control_unit).input_ids[1:]) != 20:
+            #         print('the length is:',len(control_unit),',string is:',control_unit)
         del grad, control_cand ; gc.collect()
         
         # Search
@@ -164,12 +178,17 @@ class GCGMultiPromptAttack(MultiPromptAttack):
                 # Looping through the prompts at this level is less elegant, but
                 # we can manage VRAM better this way
                 progress = tqdm(range(len(self.prompts[0])), total=len(self.prompts[0])) if verbose else enumerate(self.prompts[0])
-                for i in progress:
-                    for k, worker in enumerate(self.workers):
+                # calculate the loss
+                for i in progress: # i stands for the prompt number
+                    for k, worker in enumerate(self.workers): # k is the worker nuber (or GPU)
                         worker(self.prompts[k][i], "logits", worker.model, cand, return_ids=True)
                     logits, ids = zip(*[worker.results.get() for worker in self.workers])
+                    ids = [torch.load('ids.pth')[i] for m in range(len(self.workers))]
+                    # print(logits[0].shape, ids[0].shape)
+                    # print('logit size ',logits[0].shape,'id shape',ids[0].shape)
+                    # print('the shape is',[id.shape for id in ids])
                     loss[j*batch_size:(j+1)*batch_size] += sum([
-                        target_weight*self.prompts[k][i].target_loss(logit, id).mean(dim=-1).to(main_device) 
+                        target_weight*self.prompts[k][i].target_loss(logit, id.repeat(logit.size(0),1,1)).mean(dim=-1).to(main_device) 
                         for k, (logit, id) in enumerate(zip(logits, ids))
                     ])
                     if control_weight != 0:
@@ -188,7 +207,6 @@ class GCGMultiPromptAttack(MultiPromptAttack):
             next_control, cand_loss = control_cands[model_idx][batch_idx], loss[min_idx]
         
         del control_cands, loss ; gc.collect()
-
         print('Current length:', len(self.workers[0].tokenizer(next_control).input_ids[1:]))
         print(next_control)
 

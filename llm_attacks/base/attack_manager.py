@@ -128,37 +128,53 @@ class AttackPrompt(object):
         self._update_ids()
 
     def _update_ids(self):
-
+        # roles[0] is [INST] and roles[1] is [/INST]
         self.conv_template.append_message(self.conv_template.roles[0], f"{self.goal} {self.control}")
         self.conv_template.append_message(self.conv_template.roles[1], f"{self.target}")
         prompt = self.conv_template.get_prompt()
+        # print(prompt)
         encoding = self.tokenizer(prompt)
         toks = encoding.input_ids
+        # print(toks)
 
         if self.conv_template.name == 'llama-2':
             self.conv_template.messages = []
-
+            
             self.conv_template.append_message(self.conv_template.roles[0], None)
+            # print(self.conv_template.messages)
             toks = self.tokenizer(self.conv_template.get_prompt()).input_ids
-            self._user_role_slice = slice(None, len(toks))
+            # feedback is '[INST] [INST]' (reduce 3 for the slice to fix)
+            # print('feedback for user role is:',self.conv_template.get_prompt())
+            # print('toks is:',toks,'length is:',len(toks))
+            self._user_role_slice = slice(None, len(toks) - 3)
+            # print('user role is: \"{}\"'.format(self.tokenizer.decode(encoding.input_ids[self._user_role_slice])))
 
             self.conv_template.update_last_message(f"{self.goal}")
             toks = self.tokenizer(self.conv_template.get_prompt()).input_ids
-            self._goal_slice = slice(self._user_role_slice.stop, max(self._user_role_slice.stop, len(toks)))
+            # print('feedback for goal is:',self.conv_template.get_prompt())
+            self._goal_slice = slice(self._user_role_slice.stop, max(self._user_role_slice.stop, len(toks)-1))
+            # print('goal is: \"{}\"'.format(self.tokenizer.decode(encoding.input_ids[self._goal_slice])))
 
             separator = ' ' if self.goal else ''
             self.conv_template.update_last_message(f"{self.goal}{separator}{self.control}")
             toks = self.tokenizer(self.conv_template.get_prompt()).input_ids
-            self._control_slice = slice(self._goal_slice.stop, len(toks))
+            # print('feedback for control is:',self.conv_template.get_prompt())
+            self._control_slice = slice(self._goal_slice.stop, len(toks)-1)
+            # print('control is: \"{}\"'.format(self.tokenizer.decode(encoding.input_ids[self._control_slice])))
 
             self.conv_template.append_message(self.conv_template.roles[1], None)
             toks = self.tokenizer(self.conv_template.get_prompt()).input_ids
             self._assistant_role_slice = slice(self._control_slice.stop, len(toks))
+            # print('assistant_role is: \"{}\"'.format(self.tokenizer.decode(encoding.input_ids[self._assistant_role_slice])))
 
             self.conv_template.update_last_message(f"{self.target}")
             toks = self.tokenizer(self.conv_template.get_prompt()).input_ids
             self._target_slice = slice(self._assistant_role_slice.stop, len(toks)-2)
+            # print('target is: \"{}\"'.format(self.tokenizer.decode(encoding.input_ids[self._target_slice])))
             self._loss_slice = slice(self._assistant_role_slice.stop-1, len(toks)-3)
+            
+            # print("TOKS", toks)
+            # print("ATTACK PROMPT", prompt)
 
         else:
             python_tokenizer = False or self.conv_template.name == 'oasst_pythia'
@@ -223,16 +239,20 @@ class AttackPrompt(object):
                 )
 
         self.input_ids = torch.tensor(toks[:self._target_slice.stop], device='cpu')
+        prompt = self.conv_template.get_prompt()
+        # print(prompt)
         self.conv_template.messages = []
 
     @torch.no_grad()
     def generate(self, model, gen_config=None):
         if gen_config is None:
             gen_config = model.generation_config
-            gen_config.max_new_tokens = 16
-        
-        if gen_config.max_new_tokens > 32:
-            print('WARNING: max_new_tokens > 32 may cause testing to slow down.')
+            gen_config.max_new_tokens = 32
+        # print('max_new_tokens is:')
+        # print(gen_config.max_new_tokens)
+        gen_config.max_new_tokens = 32
+        # if gen_config.max_new_tokens > 32:
+        #     print('WARNING: max_new_tokens > 32 may cause testing to slow down.')
         input_ids = self.input_ids[:self._assistant_role_slice.stop].to(model.device).unsqueeze(0)
         attn_masks = torch.ones_like(input_ids).to(model.device)
         output_ids = model.generate(input_ids, 
@@ -253,12 +273,17 @@ class AttackPrompt(object):
         print(gen_str)
         jailbroken = not any([prefix in gen_str for prefix in self.test_prefixes])
         em = self.target in gen_str
-        return jailbroken, int(em)
+        return jailbroken, int(em), gen_str
 
     @torch.no_grad()
     def test_loss(self, model):
         logits, ids = self.logits(model, return_ids=True)
-        return self.target_loss(logits, ids).mean().item()
+        # self.get_ids(model)
+        return self.test_target_loss(logits, ids).mean().item()
+        # self.get_ids(model)
+        # logits = self.logits(model, return_ids=False)
+        # ids = torch.load('ids.pth')
+        # return self.target_loss(logits, ids).mean().item()
     
     def grad(self, model):
         
@@ -316,8 +341,31 @@ class AttackPrompt(object):
             logits = model(input_ids=ids, attention_mask=attn_mask).logits
             del ids ; gc.collect()
             return logits
-    
+
     def target_loss(self, logits, ids):
+        crit = nn.CrossEntropyLoss(reduction='none')
+        loss_slice = slice(self._target_slice.start-1, self._target_slice.stop-1)
+        loss_slice_length = loss_slice.stop - loss_slice.start
+
+        # print('logit shape is',logits[:,loss_slice,:].shape, 'id shape is',ids[:,: loss_slice_length,:].shape)
+        # predict_ids = torch.argmax(logits[:,loss_slice,:], dim=-1)
+        # target_ids = torch.argmax(ids[:,: loss_slice_length,:], dim=-1)
+        # predict_tokens = self.tokenizer.convert_ids_to_tokens(predict_ids[0].tolist())
+        # target_tokens = self.tokenizer.convert_ids_to_tokens(target_ids[0].tolist())
+        # print('predict id length',len(predict_ids[0]),'target id length',len(target_ids[0]))
+        # print('predict length',len(predict_tokens),'target length',len(target_tokens))
+        # for i in range(len(predict_tokens)):
+        #     print('the',i,'predict_token is',predict_tokens[i],'target_token is',target_tokens[i])
+        
+        probability = F.softmax(ids[:,: loss_slice_length,:],dim = -1)
+        loss = crit(
+            logits[:,loss_slice,:].transpose(1, 2),
+            probability.transpose(1, 2),
+        )
+        return loss
+    
+    def test_target_loss(self, logits, ids):
+
         crit = nn.CrossEntropyLoss(reduction='none')
         loss_slice = slice(self._target_slice.start-1, self._target_slice.stop-1)
         loss = crit(logits[:,loss_slice,:].transpose(1,2), ids[:,self._target_slice])
@@ -456,7 +504,7 @@ class PromptManager(object):
         if gen_config is None:
             gen_config = model.generation_config
             gen_config.max_new_tokens = 16
-
+        gen_config.max_new_tokens = 16
         return [prompt.generate(model, gen_config) for prompt in self._prompts]
     
     def generate_str(self, model, gen_config=None):
@@ -482,6 +530,8 @@ class PromptManager(object):
             return vals
     
     def target_loss(self, logits, ids):
+        ids = torch.load('ids.pth')
+        # print('the shape is',[i.shape for i in a])
         return torch.cat(
             [
                 prompt.target_loss(logit, id).mean(dim=1).unsqueeze(1)
@@ -690,7 +740,7 @@ class MultiPromptAttack(object):
         for i in range(n_steps):
             
             if stop_on_success:
-                model_tests_jb, model_tests_mb, _ = self.test(self.workers, self.prompts)
+                model_tests_jb, model_tests_mb, _, _ = self.test(self.workers, self.prompts)
                 if all(all(tests for tests in model_test) for model_test in model_tests_jb):
                     break
 
@@ -716,6 +766,7 @@ class MultiPromptAttack(object):
             if loss < best_loss:
                 best_loss = loss
                 best_control = control
+                
             print('Current Loss:', loss, 'Best Loss:', best_loss)
 
             if self.logfile is not None and (i+1+anneal_from) % test_steps == 0:
@@ -732,16 +783,18 @@ class MultiPromptAttack(object):
     def test(self, workers, prompts, include_loss=False):
         for j, worker in enumerate(workers):
             worker(prompts[j], "test", worker.model)
-        model_tests = np.array([worker.results.get() for worker in workers])
+        all_results = [worker.results.get() for worker in workers]
+        model_tests = np.array([[res[:2] for res in worker_res] for worker_res in all_results])
         model_tests_jb = model_tests[...,0].tolist()
         model_tests_mb = model_tests[...,1].tolist()
+        model_tests_output = [[res[2] for res in worker_res] for worker_res in all_results]
         model_tests_loss = []
         if include_loss:
             for j, worker in enumerate(workers):
                 worker(prompts[j], "test_loss", worker.model)
             model_tests_loss = [worker.results.get() for worker in workers]
-
-        return model_tests_jb, model_tests_mb, model_tests_loss
+        # print(model_tests_loss)
+        return model_tests_jb, model_tests_mb, model_tests_loss,model_tests_output
 
     def test_all(self):
         all_workers = self.workers + self.test_workers
@@ -757,6 +810,7 @@ class MultiPromptAttack(object):
             )
             for worker in all_workers
         ]
+
         return self.test(all_workers, all_prompts, include_loss=True)
     
     def parse_results(self, results):
@@ -770,13 +824,14 @@ class MultiPromptAttack(object):
 
     def log(self, step_num, n_steps, control, loss, runtime, model_tests, verbose=True):
 
-        prompt_tests_jb, prompt_tests_mb, model_tests_loss = list(map(np.array, model_tests))
+        prompt_tests_jb, prompt_tests_mb, model_tests_loss,model_tests_output = list(map(np.array, model_tests))
+        # print(model_tests_output)
         all_goal_strs = self.goals + self.test_goals
         all_workers = self.workers + self.test_workers
         tests = {
             all_goal_strs[i]:
             [
-                (all_workers[j].model.name_or_path, prompt_tests_jb[j][i], prompt_tests_mb[j][i], model_tests_loss[j][i])
+                (all_workers[j].model.name_or_path, prompt_tests_jb[j][i], prompt_tests_mb[j][i], model_tests_loss[j][i],model_tests_output[j][i] )
                 for j in range(len(all_workers))
             ]
             for i in range(len(all_goal_strs))
@@ -1405,7 +1460,7 @@ class EvaluateAttack(object):
                         batch_attention_mask = batch_inputs['attention_mask'].to(model.device)
                         # position_ids = batch_attention_mask.long().cumsum(-1) - 1
                         # position_ids.masked_fill_(batch_attention_mask == 0, 1)
-                        outputs = model.generate(batch_input_ids, attention_mask=batch_attention_mask, max_new_tokens=max(max_new_len, max(batch_max_new)))
+                        outputs = model.generate(batch_input_ids, attention_mask=batch_attention_mask, max_new_tokens= max(max_new_len, max(batch_max_new))) # max(max_new_len, max(batch_max_new))
                         batch_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
                         gen_start_idx = [len(tokenizer.decode(batch_input_ids[i], skip_special_tokens=True)) for i in range(len(batch_input_ids))]
                         batch_outputs = [output[gen_start_idx[i]:] for i, output in enumerate(batch_outputs)]
@@ -1558,7 +1613,8 @@ def get_workers(params, eval=False):
     return workers[:num_train_models], workers[num_train_models:]
 
 def get_goals_and_targets(params):
-
+    # hyperparameter to deicide the string length of target
+    str_len = 20
     train_goals = getattr(params, 'goals', [])
     train_targets = getattr(params, 'targets', [])
     test_goals = getattr(params, 'test_goals', [])
@@ -1568,6 +1624,7 @@ def get_goals_and_targets(params):
     if params.train_data:
         train_data = pd.read_csv(params.train_data)
         train_targets = train_data['target'].tolist()[offset:offset+params.n_train_data]
+        # train_targets = [target[0:str_len] for target in train_data['target'].tolist()[offset:offset+params.n_train_data]] 
         if 'goal' in train_data.columns:
             train_goals = train_data['goal'].tolist()[offset:offset+params.n_train_data]
         else:
@@ -1575,6 +1632,7 @@ def get_goals_and_targets(params):
         if params.test_data and params.n_test_data > 0:
             test_data = pd.read_csv(params.test_data)
             test_targets = test_data['target'].tolist()[offset:offset+params.n_test_data]
+            # test_targets = [target[0:str_len] for target in test_data['target'].tolist()[offset:offset+params.n_test_data]]
             if 'goal' in test_data.columns:
                 test_goals = test_data['goal'].tolist()[offset:offset+params.n_test_data]
             else:
@@ -1590,5 +1648,8 @@ def get_goals_and_targets(params):
     assert len(test_goals) == len(test_targets)
     print('Loaded {} train goals'.format(len(train_goals)))
     print('Loaded {} test goals'.format(len(test_goals)))
-
+    # print('train_goals is:')
+    # print(train_goals)
+    # print('train_targets is: ')
+    # print(train_targets)
     return train_goals, train_targets, test_goals, test_targets

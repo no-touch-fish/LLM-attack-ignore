@@ -1,0 +1,12 @@
+1. Loss not match
+Current Loss: attack_manager 767 line    
+Loss (larger one): attack_manager 836 line -> test_all() -> test(function in 780 line) -> what is result?
+
+2. Some hard-to-train key words
+"#!/bin/bash", "bomb", "poison", "child", "app", "fraud"
+
+3. change the code from "ignore" to "replace"
+main.py: 
+    get_id(); attack's parameter
+attack_manager.py:
+    AttackPrompt(); 

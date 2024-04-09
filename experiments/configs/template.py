@@ -28,7 +28,7 @@ def get_config():
     config.model_paths=['/data/vicuna/vicuna-7b-v1.3']
     config.model_kwargs=[{"low_cpu_mem_usage": True, "use_cache": False}]
     config.conversation_templates=['vicuna']
-    config.devices=['cuda:0']
+    config.devices=['cuda:2']
 
     # data
     config.train_data = ''
@@ -37,17 +37,33 @@ def get_config():
     config.n_test_data = 0
     config.data_offset = 0
 
+    #target probability
+    # config.target_pro = ''
+
     # attack-related parameters
     config.attack = 'gcg'
-    config.control_init = "! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! !"
+    config.control_init = " [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]"
     config.n_steps = 500
     config.test_steps = 50
-    config.batch_size = 512
+    config.batch_size = 512 # original:512
     config.lr = 0.01
-    config.topk = 256
+    config.topk = 256 # original:256
     config.temp = 1
     config.filter_cand = True
 
     config.gbda_deterministic = True
 
     return config
+
+# several init prompt we can try
+# [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]
+# [INST] [INST] [INST] [INST] [INST] [INST] [INST]
+
+# best string currently
+#{\\resizeproto extens=\"<?tikzpicture ( this (>)FP] desktopINST (]$,FP),\\webpackWebachiv
+
+# some prompts need to test
+
+
+
+

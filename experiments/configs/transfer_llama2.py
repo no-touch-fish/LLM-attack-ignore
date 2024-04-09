@@ -13,11 +13,11 @@ def get_config():
     config.progressive_goals = False
     config.stop_on_success = False
     config.tokenizer_paths = [
-        "/DIR/llama-2/llama/llama-2-7b-chat-hf"
+        "/share/models/llama2/hf/7B-chat"
     ]
     config.tokenizer_kwargs = [{"use_fast": False}]
     config.model_paths = [
-        "/DIR/llama-2/llama/llama-2-7b-chat-hf"
+        "/share/models/llama2/hf/7B-chat"
    ]
     config.model_kwargs = [
         {"low_cpu_mem_usage": True, "use_cache": False}
